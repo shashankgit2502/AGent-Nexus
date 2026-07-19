@@ -1,0 +1,132 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Theme ported from reference/nex-agi/src/index.css (the design source).
+ * The reference is Tailwind v4 (@theme + @import "tailwindcss"); here we are
+ * Tailwind v3, so fonts move to tailwind.config.ts and the plain-CSS classes
+ * below are copied VERBATIM. Fonts are loaded via next/font in app/layout.tsx
+ * (no Google Fonts @import) and exposed as --font-sans / --font-mono.
+ */
+
+/* Enforce the deep dark background on HTML and Body with a gorgeous neutral obsidian touch */
+html {
+  background-color: #050506;
+  color: #ffffff;
+  min-height: 100%;
+  /*
+   * Root-cause of the "white dropdown" bug: native form controls (the <select>
+   * popup, scrollbars, date pickers) are painted by the user-agent, not the DOM.
+   * Without color-scheme the UA paints them in the LIGHT theme — a white popup
+   * under our light option text = unreadable. Declaring the dark scheme makes
+   * every native control match the obsidian theme.
+   */
+  color-scheme: dark;
+}
+
+body {
+  background-color: #050506 !important;
+  color: #ffffff !important;
+  font-family: var(--font-sans), "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-sans), "Inter", sans-serif !important;
+  letter-spacing: -0.025em;
+}
+
+/* Elegant, High-End Matte Dark Background with modern radial ambient light maps */
+.artistic-background {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(24, 24, 27, 0.4) 0%, transparent 60%),
+    radial-gradient(circle at 100% 100%, rgba(18, 18, 20, 0.3) 0%, transparent 50%),
+    #050506;
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Professional sub-pixel grid structure instead of AI star twinkle overlays */
+.artistic-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background-size: 32px 32px;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+/* High Contrast Linear Text Gradients */
+.artistic-text-gradient {
+  background: linear-gradient(180deg, #ffffff 0%, #a3a3a3 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Completely hidden layout neon blobs to avoid AI template looks */
+.artistic-glow-blob {
+  display: none !important;
+}
+
+/* Translucent High-End Glassmorphism */
+.artistic-pane {
+  background: rgba(18, 18, 22, 0.45);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.artistic-pane-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.artistic-pane-hover:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* Vertical protocol label decoration */
+.vertical-protocol {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-orientation: mixed;
+}
+
+/* Fine-tuned dark scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/*
+ * Native <select> dropdown legibility + polish. The open option list is painted
+ * by the browser, so each <option> needs an explicit SOLID dark background (the
+ * control's translucent bg does not carry into the popup) and light text to stay
+ * readable on every browser/OS. optgroup labels read as muted section headers.
+ */
+select option,
+select optgroup {
+  background-color: #0c0f0e;
+  color: #e5e7eb;
+}
+select optgroup {
+  font-weight: 600;
+  color: #9ca3af;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Nex AGI",
+  "description": "Multi-agent operating system for autonomous engineering teams to converge and solve complex software goals in real time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
