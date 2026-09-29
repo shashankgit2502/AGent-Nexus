@@ -108,5 +108,19 @@
       "Bash(docker volume *)",
       "Bash(docker exec *)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Users/Shashank Singh/AppData/Local/Programs/Python/Python312/Scripts/headroom.EXE\" wrap selfheal --marker headroom-wrap-selfheal",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
