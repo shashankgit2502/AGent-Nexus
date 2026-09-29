@@ -13,6 +13,7 @@ import { motion } from "framer-motion";
 import { Check, Pencil, X, UserCheck } from "lucide-react";
 import { useSessionStore } from "@/store/session-store";
 import { Markdown } from "@/components/ui/markdown";
+import { cn } from "@/lib/utils";
 import type { ResumeDecision } from "@/types/api";
 import type { AgentLabel } from "@/components/agent-graph/graph-model";
 
@@ -26,6 +27,74 @@ interface HitlGateProps {
   labels: Record<string, AgentLabel>;
   onDecide: (payload: HitlDecisionPayload) => void;
   submitting: boolean;
+}
+
+/**
+ * The plan's acceptance criteria, checked against the agreed result (ARCH §4.1).
+ *
+ * This is what turns the gate from "does this read well?" into "did the team do what it
+ * was asked?". The planner has always defined `acceptance` criteria per subtask; until now
+ * nothing evaluated them, so a run could finish with half its work unaddressed and look
+ * identical to one that finished properly.
+ *
+ * Renders nothing when `acceptance` is null — which means **unverified** (no criteria in
+ * the plan, no verifier configured, or verification failed), NOT "passed". Drawing an
+ * all-green checklist for an unverified run would be exactly the false assurance the human
+ * gate exists to prevent.
+ */
+function AcceptanceChecklist() {
+  const acceptance = useSessionStore((s) => s.run.acceptance);
+  if (!acceptance || acceptance.total === 0) return null;
+
+  const allMet = acceptance.metCount === acceptance.total;
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 p-3 mb-4">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <span className="text-[9px] font-mono uppercase tracking-[0.2em] text-zinc-500">
+          Acceptance checks
+        </span>
+        <span
+          className={cn(
+            "text-[10px] font-mono font-bold",
+            allMet ? "text-emerald-400" : "text-amber-300",
+          )}
+        >
+          {acceptance.metCount}/{acceptance.total} met
+        </span>
+      </div>
+      <ul className="flex flex-col gap-1.5">
+        {acceptance.checks.map((check, i) => (
+          <li key={`${check.subtask_id}-${i}`} className="flex items-start gap-2">
+            {check.met ? (
+              <Check className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400" />
+            ) : (
+              <X className="w-3.5 h-3.5 mt-0.5 shrink-0 text-rose-400" />
+            )}
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "text-[11.5px] leading-snug",
+                  check.met ? "text-zinc-300" : "text-rose-200",
+                )}
+              >
+                {check.criterion}
+              </p>
+              {check.evidence ? (
+                <p className="text-[10.5px] text-zinc-500 leading-snug mt-0.5 italic">
+                  “{check.evidence}”
+                </p>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {!allMet ? (
+        <p className="mt-2 text-[10.5px] text-amber-300/80 leading-snug">
+          Some criteria are unmet — approving accepts the result as-is.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 export function HitlGate({ labels, onDecide, submitting }: HitlGateProps) {
@@ -65,6 +134,8 @@ export function HitlGate({ labels, onDecide, submitting }: HitlGateProps) {
           <p className="text-[12px] text-zinc-500">No candidate text provided.</p>
         )}
       </div>
+
+      <AcceptanceChecklist />
 
       {mode === "edit" && (
         <textarea

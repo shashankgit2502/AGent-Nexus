@@ -7,7 +7,7 @@
  * Numeric parsing/validation lives in the pure `provider-model` module.
  */
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Star, Trash2 } from "lucide-react";
 import {
   Pane,
   SectionTitle,
@@ -24,8 +24,11 @@ import {
   useCatalog,
   useCreateProfile,
   useDeleteProfile,
+  useSetDefaultProfile,
 } from "@/features/providers/use-providers";
 import {
+  REASONING_LEVEL_OPTIONS,
+  VERBOSITY_OPTIONS,
   initialProfileForm,
   validateProfile,
   toProfileCreate,
@@ -52,6 +55,7 @@ export function ProfilesPanel() {
   const chatModels = useCatalog(); // any catalog model can be a profile default
   const create = useCreateProfile();
   const remove = useDeleteProfile();
+  const setDefault = useSetDefaultProfile();
   const patch = (next: Partial<ProfileFormState>) => setForm((p) => ({ ...p, ...next }));
 
   const onDelete = (id: UUID, name: string) => {
@@ -89,7 +93,10 @@ export function ProfilesPanel() {
   return (
     <Pane>
       <div className="flex items-center justify-between">
-        <SectionTitle label="3 · Inference profiles" hint="Default model + params agents reference" />
+        <SectionTitle
+          label="3 · Inference profiles"
+          hint="Model + params agents reference. ★ marks the profile whose model plans and synthesizes every run."
+        />
         <GhostButton onClick={() => setOpen((v) => !v)}>{open ? "Close" : "Add profile"}</GhostButton>
       </div>
 
@@ -111,7 +118,7 @@ export function ProfilesPanel() {
               ))}
             </SelectInput>
           </Field>
-          <Field label="Temperature" hint="0–2">
+          <Field label="Temperature" hint="0–2 · ignored by GPT-5 family models">
             <TextInput
               value={form.temperature}
               onChange={(e) => patch({ temperature: e.target.value })}
@@ -119,7 +126,7 @@ export function ProfilesPanel() {
               placeholder="0.7"
             />
           </Field>
-          <Field label="top_p" hint="0–1">
+          <Field label="top_p" hint="0–1 · ignored by GPT-5 family models">
             <TextInput
               value={form.topP}
               onChange={(e) => patch({ topP: e.target.value })}
@@ -134,11 +141,39 @@ export function ProfilesPanel() {
               inputMode="numeric"
             />
           </Field>
-          <Field label="Reasoning level" hint="e.g. low / medium / high">
-            <TextInput
+          <Field
+            label="Reasoning level"
+            hint="GPT-5 family only; withheld from GPT-4 and earlier. Agents with tools are routed to the Responses API so this setting is kept."
+          >
+            <SelectInput
               value={form.reasoningLevel}
-              onChange={(e) => patch({ reasoningLevel: e.target.value })}
-            />
+              onChange={(e) =>
+                patch({ reasoningLevel: e.target.value as ProfileFormState["reasoningLevel"] })
+              }
+            >
+              {REASONING_LEVEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+          <Field
+            label="Verbosity"
+            hint="GPT-5 output length, without rewriting the prompt. Reasoning models only."
+          >
+            <SelectInput
+              value={form.verbosity}
+              onChange={(e) =>
+                patch({ verbosity: e.target.value as ProfileFormState["verbosity"] })
+              }
+            >
+              {VERBOSITY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </SelectInput>
           </Field>
           <div className="flex flex-col gap-2 justify-center md:col-span-2">
             <Toggle checked={form.jsonMode} onChange={(on) => patch({ jsonMode: on })} label="JSON mode" />
@@ -171,12 +206,30 @@ export function ProfilesPanel() {
                   key={p.id}
                   className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-2.5 flex items-center justify-between gap-3"
                 >
-                  <p className="text-[12.5px] font-semibold text-zinc-100 truncate">{p.name}</p>
+                  <p className="text-[12.5px] font-semibold text-zinc-100 truncate">
+                    {p.name}
+                    {p.is_default ? (
+                      <span className="ml-2 text-[9px] uppercase font-bold tracking-[0.15em] px-1.5 py-0.5 rounded border border-emerald-500/30 text-emerald-300 font-mono align-middle">
+                        Default
+                      </span>
+                    ) : null}
+                  </p>
                   <div className="flex items-center gap-2 shrink-0">
                     <p className="text-[10px] text-zinc-500 font-mono">
                       {p.temperature !== null ? `temp ${p.temperature}` : "temp —"}
                       {p.json_mode ? " · json" : ""}
                     </p>
+                    {!p.is_default ? (
+                      <button
+                        type="button"
+                        title="Use this profile's model for planning and synthesis"
+                        onClick={() => setDefault.mutate(p.id)}
+                        disabled={setDefault.isPending}
+                        className="p-1.5 rounded-lg border border-white/10 bg-white/[0.02] text-zinc-400 hover:text-emerald-300 hover:border-emerald-500/30 transition-colors disabled:opacity-40"
+                      >
+                        <Star className="w-3.5 h-3.5" />
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       title="Delete profile"

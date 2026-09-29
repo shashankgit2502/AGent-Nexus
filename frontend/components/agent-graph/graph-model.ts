@@ -23,10 +23,11 @@
  * type-only imports, erased at compile, so the pure test never loads React Flow.
  */
 import type { Node, Edge } from "@xyflow/react";
-import type { ContentBlock, CritiqueSeverity } from "@/types/agui";
+import type { A2AIntent, ContentBlock, CritiqueSeverity } from "@/types/agui";
 import type {
   RunState,
   AgentStatus,
+  A2AMessageEntry,
   ContributionEntry,
   CritiqueEntry,
 } from "@/store/session-reducer";
@@ -59,15 +60,49 @@ export interface AgentNodeData extends Record<string, unknown> {
   /** why this agent failed/abstained this run (backend `error.message`), for the
    * node to show — null when the agent has no error. */
   errorMessage: string | null;
+  /**
+   * What the plan assigned this agent (ARCH §4.1) — the node's job title, so the board
+   * reads "Research: find the regulations" instead of an anonymous dot. Null for an agent
+   * the plan gave no subtask (a reviewer role, or a `debate` plan with no split).
+   */
+  subtask: string | null;
+  /** Peer votes received this round (ARCH §8.1) — shows who the team actually backed. */
+  votes: number;
 }
 
 export type AgentNode = Node<AgentNodeData, "agent">;
 
 export interface AgentEdgeData extends Record<string, unknown> {
-  kind: "static" | "critique" | "reply";
+  kind: "static" | "critique" | "reply" | "a2a";
   severity?: CritiqueSeverity;
+  /** For `kind: "a2a"` — which performative this edge represents (ARCH §23.3). */
+  intent?: A2AIntent;
   active: boolean;
 }
+
+/**
+ * A2A intents that produce a **point-to-point edge** on the graph.
+ *
+ * Only directed intents qualify. `INFORM` and `PROPOSE` are broadcasts — they have no
+ * single "whom", so rendering them as edges would mean N-1 lines from every sender to
+ * every peer: the exact O(N²) clutter `STATIC_MESH_MAX` already exists to prevent, and it
+ * would say nothing beyond "someone spoke". Broadcasts belong in the debate timeline, which
+ * answers "what was said, in order"; the graph answers "who asked whom".
+ */
+const EDGE_INTENTS: readonly A2AIntent[] = ["REQUEST", "DELEGATE", "ENDORSE", "VOTE"];
+
+/** Per-intent edge styling — colour carries meaning, width carries emphasis. */
+const A2A_EDGE_STYLE: Record<string, { color: string; width: number }> = {
+  // Amber: someone is blocked and waiting on a peer. The most action-bearing edge
+  // on the board, so it reads warmest.
+  REQUEST: { color: "#f59e0b", width: 2.0 },
+  // Violet: work changed hands — a structural change to who-does-what.
+  DELEGATE: { color: "#a78bfa", width: 2.2 },
+  // Emerald: genuine peer agreement (feeds the §8.1 consensus score).
+  ENDORSE: { color: "#34d399", width: 1.6 },
+  // Teal, thin: a ballot is real signal but carries no content to read.
+  VOTE: { color: "#2dd4bf", width: 1.2 },
+};
 
 export type AgentEdge = Edge<AgentEdgeData>;
 
@@ -136,6 +171,16 @@ export function buildGraphModel(
   const idSet = new Set(ids);
   const positions = layoutPositions(ids);
 
+  // agent_id → the plan's title for its work. Multiple subtasks join with " · " so an
+  // agent owning two pieces still reads honestly rather than showing only the first.
+  const subtasks = new Map<string, string[]>();
+  for (const task of run.plan?.subtasks ?? []) {
+    const list = subtasks.get(task.agent_id);
+    if (list) list.push(task.title);
+    else subtasks.set(task.agent_id, [task.title]);
+  }
+  const tally = run.consensus?.tally ?? {};
+
   // A run that reached a terminal state (finished/errored — including an
   // interrupted run finalized by the backend's startup recovery, ARCH §24.8) must
   // not leave agents pulsing "thinking"/"tool_call" forever: the work is over.
@@ -171,6 +216,8 @@ export function buildGraphModel(
         confidence: runtime?.latestConfidence ?? null,
         hasError,
         errorMessage: agentError?.message ?? null,
+        subtask: subtasks.get(id)?.join(" · ") ?? null,
+        votes: tally[id] ?? 0,
       },
     };
   });
@@ -258,6 +305,39 @@ export function buildGraphModel(
         });
       }
     }
+
+    // A2A edges (ARCH §23.3) — the directed intents, which is what finally makes the
+    // board show a *team* rather than parallel monologues: who is blocked on whom
+    // (REQUEST), who handed work over (DELEGATE), and who backed whose answer
+    // (ENDORSE/VOTE). Broadcasts are deliberately excluded — see `EDGE_INTENTS`.
+    //
+    // Same honesty rule as every other edge (§9.10): each one is backed by a real
+    // `a2a_message` event that passed backend validation. Nothing decorative.
+    const a2aPairs = new Set<string>();
+    for (const m of run.messages) {
+      if (m.round !== round) continue;
+      if (!EDGE_INTENTS.includes(m.intent)) continue;
+      if (m.recipients === "*" || !idSet.has(m.sender)) continue;
+      for (const target of m.recipients) {
+        if (target === m.sender || !idSet.has(target)) continue;
+        // One edge per (sender, target, intent): an agent that sends two REQUESTs to
+        // the same peer in one round is one relationship, not two lines.
+        const key = `${m.intent}-${m.sender}->${target}`;
+        if (a2aPairs.has(key)) continue;
+        a2aPairs.add(key);
+        const style = A2A_EDGE_STYLE[m.intent] ?? { color: REPLY_COLOR, width: 1.4 };
+        edges.push({
+          id: `a2a-${key}-r${round}`,
+          source: m.sender,
+          target,
+          animated: true,
+          selectable: false,
+          markerEnd: "arrowclosed",
+          data: { kind: "a2a", intent: m.intent, active: true },
+          style: { stroke: style.color, strokeWidth: style.width },
+        });
+      }
+    }
   }
 
   return { nodes, edges };
@@ -288,7 +368,28 @@ export interface DebateCritiqueItem {
   severity: CritiqueSeverity;
   content: string;
 }
-export type DebateItem = DebateContributionItem | DebateCritiqueItem;
+/**
+ * One typed inter-agent message in the thread (ARCH §23.3).
+ *
+ * The timeline is where broadcasts live: an `INFORM` carrying the three regulations
+ * Research found has no single recipient to draw an edge to, but it is exactly the thing a
+ * user needs to read. Directed intents appear here *as well as* on the graph — the graph
+ * shows the relationship, the thread shows what was actually said.
+ */
+export interface DebateMessageItem {
+  kind: "message";
+  key: string;
+  round: number;
+  sender: string;
+  /** `null` = broadcast to the whole team. */
+  recipients: string[] | null;
+  intent: A2AIntent;
+  body: string;
+  severity?: CritiqueSeverity;
+  sourceUrls: string[];
+}
+
+export type DebateItem = DebateContributionItem | DebateCritiqueItem | DebateMessageItem;
 
 /**
  * Merge contributions + critiques into one ordered thread.
@@ -322,7 +423,26 @@ export function buildDebateTimeline(run: RunState): DebateItem[] {
       content: c.content,
     }),
   );
-  return [...contributions, ...critiques].sort((a, b) => a.round - b.round);
+  // A2A messages join the same thread. `VOTE` is excluded: it carries no body, so as a
+  // thread row it would be a content-free line repeated once per agent per round —
+  // pure noise. Votes are shown where they mean something: the graph edge and the
+  // consensus tally.
+  const messages: DebateItem[] = run.messages
+    .filter((m: A2AMessageEntry) => m.intent !== "VOTE")
+    .map(
+      (m: A2AMessageEntry): DebateMessageItem => ({
+        kind: "message",
+        key: `msg-${m.id}`,
+        round: m.round,
+        sender: m.sender,
+        recipients: m.recipients === "*" ? null : [...m.recipients],
+        intent: m.intent,
+        body: m.body,
+        severity: m.severity,
+        sourceUrls: m.sourceUrls,
+      }),
+    );
+  return [...contributions, ...critiques, ...messages].sort((a, b) => a.round - b.round);
 }
 
 // ── Consensus read-out (header ring + detail) ─────────────────────────────────
@@ -330,17 +450,32 @@ export function buildDebateTimeline(run: RunState): DebateItem[] {
 export interface ConsensusModel {
   /** mean confidence 0–1 (drives the ring); null before any consensus_update. */
   meanConfidence: number | null;
+  /**
+   * Mean peer-adjusted score (ARCH §8.1) — the number actually compared against τ.
+   * Equals `meanConfidence` when there is no peer signal, so it is safe to show alone.
+   */
+  meanScore: number | null;
   converged: boolean;
   /** `"agent_id:round"` ranking keys, best first. */
   ranking: string[];
   round: number;
+  /** `"agent_id:round"` → signed peer adjustment (−1…+1) applied to self-confidence. */
+  peerDeltas: Record<string, number>;
+  /** agent_id → votes received. Empty when no peer voted. */
+  tally: Record<string, number>;
+  /** share of votes on the top candidate; null when nobody voted. */
+  agreement: number | null;
 }
 
 export function buildConsensusModel(run: RunState): ConsensusModel {
   return {
     meanConfidence: run.consensus?.meanConfidence ?? null,
+    meanScore: run.consensus?.meanScore ?? run.consensus?.meanConfidence ?? null,
     converged: run.consensus?.converged ?? false,
     ranking: run.consensus?.ranking ?? [],
     round: run.round,
+    peerDeltas: run.consensus?.peerDeltas ?? {},
+    tally: run.consensus?.tally ?? {},
+    agreement: run.consensus?.agreement ?? null,
   };
 }

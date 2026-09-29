@@ -22,6 +22,7 @@ import "@xyflow/react/dist/style.css";
 import { useSessionStore } from "@/store/session-store";
 import {
   buildGraphModel,
+  type AgentEdge,
   type AgentLabel,
   type AgentNode,
 } from "@/components/agent-graph/graph-model";
@@ -85,6 +86,51 @@ function AgentGraphInner({ labels, onInspect, selectedNodeId }: AgentGraphProps)
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#ffffff10" />
         </ReactFlow>
       )}
+      {!empty ? <EdgeLegend edges={edges} /> : null}
+    </div>
+  );
+}
+
+/** Edge colour → meaning. Only the kinds actually on screen are listed. */
+const LEGEND: readonly { key: string; color: string; label: string }[] = [
+  { key: "REQUEST", color: "#f59e0b", label: "asked" },
+  { key: "DELEGATE", color: "#a78bfa", label: "handed over" },
+  { key: "ENDORSE", color: "#34d399", label: "backed" },
+  { key: "VOTE", color: "#2dd4bf", label: "voted" },
+  { key: "critique", color: "#f43f5e", label: "challenged" },
+  { key: "reply", color: "#60a5fa", label: "builds on" },
+];
+
+/**
+ * Legend for the live edges (ARCH §23.3 / §9.10).
+ *
+ * Six colours on a dense mesh is unreadable without a key — but a *static* legend listing
+ * relationships that aren't happening is just as bad, so this renders only the kinds
+ * currently drawn. An empty round shows nothing at all.
+ */
+function EdgeLegend({ edges }: { edges: readonly AgentEdge[] }) {
+  const present = new Set(
+    edges
+      .filter((e) => e.data?.active)
+      .map((e) => (e.data?.kind === "a2a" ? String(e.data?.intent) : String(e.data?.kind))),
+  );
+  const shown = LEGEND.filter((entry) => present.has(entry.key));
+  if (shown.length === 0) return null;
+
+  return (
+    <div className="absolute bottom-2 left-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-black/50 backdrop-blur-sm border border-white/10 px-2.5 py-1.5 pointer-events-none">
+      {shown.map((entry) => (
+        <span key={entry.key} className="flex items-center gap-1.5">
+          <span
+            className="h-0.5 w-3.5 rounded-full"
+            style={{ backgroundColor: entry.color }}
+            aria-hidden
+          />
+          <span className="text-[9px] font-mono uppercase tracking-wider text-zinc-400">
+            {entry.label}
+          </span>
+        </span>
+      ))}
     </div>
   );
 }

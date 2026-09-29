@@ -14,8 +14,9 @@ import {
   useDeleteCatalogModel,
   useUpdateCatalogModel,
 } from "@/features/providers/use-providers";
+import { MODEL_FAMILY_OPTIONS } from "@/features/providers/provider-model";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import type { CatalogModelRead, ModelType, UUID } from "@/types/api";
+import type { CatalogModelRead, ModelFamily, ModelType, UUID } from "@/types/api";
 
 const PAGE_SIZE = 25;
 
@@ -98,7 +99,11 @@ export function ConnectionModelsList({
  *   and defaults it to `false`, so this is how a genuinely tool-capable model is made
  *   mesh-eligible without a DB edit (Approach B, ARCH §9.3).
  * - **type** — reclassify chat↔embedding so a mislabeled model shows in the team
- *   embedding picker, without delete + re-add (Approach B, ARCH §9.5). */
+ *   embedding picker, without delete + re-add (Approach B, ARCH §9.5).
+ * - **family** — declare the request schema (GPT-5/o-series reject temperature and
+ *   top-p). Discovery writes the Azure *deployment* name into `model_identifier`,
+ *   and a name like `prod-eastus-01` carries no family signal — so for those this
+ *   is the only way to classify the model short of a DB edit. */
 function ModelRow({ model }: { model: CatalogModelRead }) {
   const update = useUpdateCatalogModel();
   const remove = useDeleteCatalogModel();
@@ -134,6 +139,30 @@ function ModelRow({ model }: { model: CatalogModelRead }) {
           >
             tools
           </button>
+        ) : null}
+        {model.model_type === "chat" ? (
+          <SelectInput
+            value={(model.model_family as ModelFamily | null) ?? "auto"}
+            disabled={busy}
+            title="Request schema — GPT-5 and the o-series reject temperature and top-p. Declare it when the model or deployment name doesn't say which model it serves (Azure deployments)."
+            aria-label="Model family"
+            className="w-36 py-1 text-[10px]"
+            onChange={(e) => {
+              const value = e.target.value as ModelFamily;
+              // `auto` is the backend's "unstated" — sent as null so the column
+              // stays NULL and the family is detected from the names.
+              update.mutate({
+                id: model.id,
+                payload: { model_family: value === "auto" ? null : value },
+              });
+            }}
+          >
+            {MODEL_FAMILY_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.value === "auto" ? "family: auto" : o.value}
+              </option>
+            ))}
+          </SelectInput>
         ) : null}
         <SelectInput
           value={model.model_type}

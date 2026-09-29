@@ -29,12 +29,13 @@ import {
   useDeleteConnection,
 } from "@/features/providers/use-providers";
 import {
+  MODEL_FAMILY_OPTIONS,
   initialCatalogForm,
   validateCatalog,
   toCatalogCreate,
   type CatalogFormState,
 } from "@/features/providers/provider-model";
-import type { ConnectionRead, ModelType } from "@/types/api";
+import type { ConnectionRead, ModelFamily, ModelType } from "@/types/api";
 
 export function CatalogPanel() {
   const [open, setOpen] = useState(false);
@@ -112,6 +113,16 @@ export function CatalogPanel() {
               placeholder="gpt-4o, claude-opus-4-8, …"
             />
           </Field>
+          <Field
+            label="Deployment name"
+            hint="Azure routes by deployment; Workbench bakes it into the request path. Blank = use the model identifier."
+          >
+            <TextInput
+              value={form.deploymentName}
+              onChange={(e) => patch({ deploymentName: e.target.value })}
+              placeholder="Your Azure / Workbench deployment"
+            />
+          </Field>
           <Field label="Context window">
             <TextInput
               value={form.contextWindow}
@@ -120,6 +131,23 @@ export function CatalogPanel() {
               placeholder="128000"
             />
           </Field>
+          {isChat ? (
+            <Field
+              label="Model family"
+              hint="GPT-5 and the o-series reject temperature and top-p. Leave on auto-detect unless the deployment name does not say which model it serves."
+            >
+              <SelectInput
+                value={form.modelFamily}
+                onChange={(e) => patch({ modelFamily: e.target.value as ModelFamily })}
+              >
+                {MODEL_FAMILY_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+          ) : null}
           <div className="flex flex-col gap-2 justify-center">
             {isChat ? (
               <Toggle

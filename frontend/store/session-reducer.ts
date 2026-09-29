@@ -17,6 +17,9 @@
  *  - `hitl`          → HITL gate
  */
 import type {
+  A2AIntent,
+  A2AMessageData,
+  AcceptanceCheck,
   AnyAGUIEvent,
   ArtifactAttachment,
   ArtifactFileKind,
@@ -27,9 +30,19 @@ import type {
   HitlSource,
   ArtifactKind,
   ErrorReason,
+  PlanStrategy,
+  PlanSubtask,
+  DeliverableKind,
 } from "@/types/agui";
 
-export type RunStatus = "idle" | "running" | "awaiting_human" | "finished" | "error";
+export type RunStatus =
+  | "idle"
+  | "running"
+  | "awaiting_human"
+  | "finished"
+  | "error"
+  /** stopped by the user (ARCH §21.6) — not a failure, and not a completed answer. */
+  | "cancelled";
 export type AgentStatus = "idle" | "thinking" | "tool_call" | "contributed";
 
 export interface AgentToolCall {
@@ -47,6 +60,8 @@ export interface AgentRuntimeState {
   reasoning: string[];
   toolCalls: AgentToolCall[];
   latestConfidence: number | null;
+  /** tokens this agent has consumed so far this run; null when unreported. */
+  tokens: { input: number; output: number; total: number } | null;
 }
 
 export interface ContributionEntry {
@@ -66,11 +81,84 @@ export interface CritiqueEntry {
   content: string;
 }
 
+/**
+ * One typed inter-agent message (ARCH §23) — what the team actually said to each
+ * other. This is the data behind "who asked whom for what": directed intents
+ * (`REQUEST`/`DELEGATE`/`ENDORSE`/`VOTE`/`CRITIQUE`) name a peer, broadcasts
+ * (`INFORM`/`PROPOSE`) go to the whole board.
+ */
+export interface A2AMessageEntry {
+  id: string;
+  sender: string;
+  /** `"*"` = broadcast to the team; otherwise the addressed peers. */
+  recipients: string[] | "*";
+  intent: A2AIntent;
+  round: number;
+  /** human-readable body pulled from the intent's payload key. */
+  body: string;
+  severity?: CritiqueSeverity;
+  sourceUrls: string[];
+  inReplyTo: string | null;
+}
+
+/** A mid-run plan change made by a peer, not by an orchestrator (ARCH §4.1). */
+export interface PlanAmendmentEntry {
+  round: number;
+  byAgent: string;
+  change: string;
+  subtaskId: string | null;
+  reason: string | null;
+}
+
+/** Post-consensus verification that the plan's acceptance criteria were met. */
+export interface AcceptanceState {
+  round: number;
+  checks: AcceptanceCheck[];
+  metCount: number;
+  total: number;
+}
+
 export interface ConsensusState {
+  /** raw mean of self-reported confidence (unchanged meaning). */
   meanConfidence: number;
+  /** mean of the peer-adjusted scores — what τ is actually compared against (ARCH §8.1). */
+  meanScore: number;
   converged: boolean;
-  /** `"agent_id:round"` keys, best first. */
+  /** `"agent_id:round"` keys, best first — ordered by peer-adjusted score. */
   ranking: string[];
+  /** `"agent_id:round"` → peer-adjusted score; empty when no peer signal exists. */
+  peerScores: Record<string, number>;
+  /** `"agent_id:round"` → signed peer adjustment (−1…+1) applied to self-confidence. */
+  peerDeltas: Record<string, number>;
+  /** share of peer votes on the top candidate; null when nobody voted. */
+  agreement: number | null;
+  /** agent_id → votes received — the "who backed whom" tally. */
+  tally: Record<string, number>;
+}
+
+/**
+ * The orchestrator's plan for the run (ARCH §4.1) — who is doing what, and what
+ * the team is building. Present from `plan_ready`, i.e. before round 1 opens, so
+ * the Workspace can show the assignment up front instead of inferring it from
+ * contributions after the fact.
+ */
+export interface PlanState {
+  strategy: PlanStrategy;
+  summary: string;
+  subtasks: PlanSubtask[];
+  deliverable: { kind: DeliverableKind; filename: string | null; notes: string | null };
+  warnings: string[];
+}
+
+/**
+ * Why the debate loop stopped early — every agent abstained this round (§21.5),
+ * e.g. all rate-limited. Distinct from `errors`: the run did not fail, it simply
+ * has no further signal to gain from another identical round.
+ */
+export interface StalledState {
+  round: number;
+  meanConfidence: number;
+  message: string;
 }
 
 export interface HitlState {
@@ -112,6 +200,15 @@ export interface ArtifactEntry {
   producerAgentId: string | null;
 }
 
+/** The run's token usage (ARCH §21.7). Tokens only — there is no cost figure yet. */
+export interface UsageState {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** resolved model name → its own counts, for a team whose agents run different models. */
+  byModel: Record<string, { input_tokens: number; output_tokens: number; total_tokens: number }>;
+}
+
 export interface RunErrorEntry {
   scope: string;
   agentId?: string;
@@ -129,17 +226,29 @@ export interface RunState {
   /** roster agent-id strings from `run_start` (joined to agent records by the UI). */
   roster: string[];
   round: number;
+  /** the orchestrator's assignment for this run; null until `plan_ready`. */
+  plan: PlanState | null;
   /** highest `seq` applied — the dedup / reconnect cursor (ARCH §24.8). */
   lastSeq: number;
   agents: Record<string, AgentRuntimeState>;
   contributions: ContributionEntry[];
   critiques: CritiqueEntry[];
+  /** the team's inter-agent conversation, in arrival order (ARCH §23). */
+  messages: A2AMessageEntry[];
+  /** plan changes peers made mid-run (ARCH §4.1). */
+  planAmendments: PlanAmendmentEntry[];
+  /** post-consensus acceptance verification; null until the report arrives. */
+  acceptance: AcceptanceState | null;
   consensus: ConsensusState | null;
+  /** set when the loop stopped early on an all-abstained round (§21.5). */
+  stalled: StalledState | null;
   hitl: HitlState | null;
   synthesis: SynthesisState | null;
   artifact: ArtifactState | null;
   /** Downloadable file artifacts (post-consensus producer, §11.1), in arrival order. */
   artifacts: ArtifactEntry[];
+  /** token usage for the run; null until the `usage` event arrives (ARCH §21.7). */
+  usage: UsageState | null;
   errors: RunErrorEntry[];
 }
 
@@ -152,15 +261,21 @@ export function initialRunState(): RunState {
     goal: null,
     roster: [],
     round: 0,
+    plan: null,
     lastSeq: 0,
     agents: {},
     contributions: [],
     critiques: [],
+    messages: [],
+    planAmendments: [],
+    acceptance: null,
     consensus: null,
+    stalled: null,
     hitl: null,
     synthesis: null,
     artifact: null,
     artifacts: [],
+    usage: null,
     errors: [],
   };
 }
@@ -198,6 +313,48 @@ function entryFromAttachment(
   };
 }
 
+/**
+ * Payload key carrying the readable body, per intent (mirror of the backend's
+ * `_BODY_KEY_BY_INTENT`, ARCH §23.3). `VOTE` has none — a ballot is a target and an
+ * optional weight, not a statement.
+ */
+const A2A_BODY_KEY: Record<A2AIntent, string | null> = {
+  INFORM: "content",
+  REQUEST: "question",
+  PROPOSE: "content",
+  CRITIQUE: "content",
+  DELEGATE: "subtask",
+  ENDORSE: "reason",
+  VOTE: null,
+};
+
+/** Read a payload value as a trimmed string, or `""` — the payload is untyped JSON. */
+function payloadText(payload: Record<string, unknown>, key: string | null): string {
+  if (!key) return "";
+  const value = payload[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Map a streamed A2A message onto a render entry, flattening the intent-keyed body. */
+function entryFromMessage(data: A2AMessageData): A2AMessageEntry {
+  const severity = data.payload.severity;
+  const sources = data.payload.source_urls;
+  return {
+    id: data.id,
+    sender: data.sender,
+    recipients: data.recipients === "*" ? "*" : [...data.recipients],
+    intent: data.intent,
+    round: data.round,
+    body: payloadText(data.payload, A2A_BODY_KEY[data.intent]),
+    severity:
+      severity === "minor" || severity === "major" || severity === "blocking"
+        ? severity
+        : undefined,
+    sourceUrls: Array.isArray(sources) ? sources.map(String) : [],
+    inReplyTo: data.in_reply_to ?? null,
+  };
+}
+
 /** Immutably get-or-create an agent's runtime slice. */
 function ensureAgent(
   agents: Record<string, AgentRuntimeState>,
@@ -211,6 +368,7 @@ function ensureAgent(
       reasoning: [],
       toolCalls: [],
       latestConfidence: null,
+      tokens: null,
     }
   );
 }
@@ -257,6 +415,18 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
         goal: event.data.goal,
         roster: [...event.data.roster],
         status: "running",
+      };
+
+    case "plan_ready":
+      return {
+        ...base,
+        plan: {
+          strategy: event.data.strategy,
+          summary: event.data.summary,
+          subtasks: [...event.data.subtasks],
+          deliverable: { ...event.data.deliverable },
+          warnings: [...event.data.warnings],
+        },
       };
 
     case "round_start":
@@ -331,13 +501,25 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
       };
     }
 
-    case "contribution":
+    case "contribution": {
+      const agent = ensureAgent(base.agents, event.data.agent_id);
+      // Accumulate across rounds — an agent's cost is what it spent over the whole run,
+      // not just its last turn. Absent `tokens` leaves the prior value untouched, so an
+      // unreported turn cannot erase what earlier rounds already measured.
+      const tokens = event.data.tokens
+        ? {
+            input: (agent.tokens?.input ?? 0) + event.data.tokens.input,
+            output: (agent.tokens?.output ?? 0) + event.data.tokens.output,
+            total: (agent.tokens?.total ?? 0) + event.data.tokens.total,
+          }
+        : agent.tokens;
       return {
         ...base,
         agents: withAgent(base, event.data.agent_id, {
           status: "contributed",
           round: event.data.round,
           latestConfidence: event.data.confidence,
+          tokens,
         }),
         contributions: [
           ...base.contributions,
@@ -351,6 +533,7 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
           },
         ],
       };
+    }
 
     case "confidence":
       // Reserved (not emitted standalone) — fold defensively if it ever appears.
@@ -376,6 +559,38 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
         ],
       };
 
+    case "a2a_message":
+      return {
+        ...base,
+        messages: [...base.messages, entryFromMessage(event.data)],
+      };
+
+    case "plan_amended":
+      return {
+        ...base,
+        planAmendments: [
+          ...base.planAmendments,
+          {
+            round: event.data.round,
+            byAgent: event.data.by_agent,
+            change: event.data.change,
+            subtaskId: event.data.subtask_id ?? null,
+            reason: event.data.reason ?? null,
+          },
+        ],
+      };
+
+    case "acceptance_report":
+      return {
+        ...base,
+        acceptance: {
+          round: event.data.round,
+          checks: [...event.data.checks],
+          metCount: event.data.met_count,
+          total: event.data.total,
+        },
+      };
+
     case "consensus_update":
       return {
         ...base,
@@ -383,6 +598,27 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
           meanConfidence: event.data.mean_confidence,
           converged: event.data.converged,
           ranking: [...event.data.ranking],
+          // Peer-weighted fields (ARCH §8.1) are optional: a run with no A2A signal —
+          // or a replay from before §8.1 — carries none, so `meanScore` falls back to
+          // `mean_confidence`, which is exactly what it equals when no peer signal exists.
+          meanScore: event.data.mean_score ?? event.data.mean_confidence,
+          peerScores: { ...(event.data.peer_scores ?? {}) },
+          peerDeltas: { ...(event.data.peer_deltas ?? {}) },
+          agreement: event.data.agreement ?? null,
+          tally: { ...(event.data.tally ?? {}) },
+        },
+      };
+
+    case "consensus_stalled":
+      // Not a failure: the loop stops early because another identical round would
+      // abstain identically (§21.5). The run continues to the human gate, so the
+      // status is left untouched — we only record WHY the debate ended short.
+      return {
+        ...base,
+        stalled: {
+          round: event.data.round,
+          meanConfidence: event.data.mean_confidence,
+          message: event.data.message,
         },
       };
 
@@ -400,6 +636,17 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
           decision: null,
           source: null,
         },
+        // The gate carries the acceptance verdict too, so a replay that starts at the
+        // interrupt still shows ✓/✗ even if the `acceptance_report` event scrolled past.
+        // Absent ⇒ leave whatever the report set (possibly null = unverified).
+        acceptance: event.data.acceptance
+          ? {
+              round: base.round,
+              checks: [...event.data.acceptance.checks],
+              metCount: event.data.acceptance.met_count,
+              total: event.data.acceptance.total,
+            }
+          : base.acceptance,
       };
 
     case "hitl_resolved":
@@ -434,10 +681,24 @@ export function applyEvent(state: RunState, event: AnyAGUIEvent): RunState {
         },
       };
 
+    case "usage":
+      return {
+        ...base,
+        usage: {
+          inputTokens: event.data.input_tokens,
+          outputTokens: event.data.output_tokens,
+          totalTokens: event.data.total_tokens,
+          byModel: { ...event.data.by_model },
+        },
+      };
+
     case "run_finished":
       return {
         ...base,
-        status: "finished",
+        // A cancelled run is terminal but is neither a success nor a failure — the
+        // header must say "stopped", not "finished" (which would imply an answer exists)
+        // and not "error" (which would imply something broke).
+        status: event.data.artifact.kind === "cancelled" ? "cancelled" : "finished",
         artifact: {
           kind: event.data.artifact.kind,
           content: event.data.artifact.content,

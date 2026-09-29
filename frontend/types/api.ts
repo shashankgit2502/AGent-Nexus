@@ -144,12 +144,49 @@ export type Provider =
   | "azure_openai"
   | "ollama"
   | "openrouter"
-  | "openai_compatible";
+  | "openai_compatible"
+  /** APIM-fronted gateway proxying to an Azure-OpenAI-shaped endpoint. */
+  | "workbench";
 export type ModelType = "chat" | "embedding";
 export type ConnectionScope = "org" | "team";
 export type CatalogSource = "discovered" | "models.dev" | "manual";
 
-export interface ConnectionCreate {
+/**
+ * Which request schema a catalog model follows (ARCH §9.2). Distinct from
+ * `supports_reasoning`: that says whether the model reasons, this says what the
+ * API accepts. `auto` = detect from the identifier + deployment name, which is
+ * what every model registered before this field existed resolves to.
+ */
+export type ModelFamily = "auto" | "gpt4" | "gpt5";
+
+/**
+ * GPT-5 reasoning controls. `minimal` arrived with GPT-5; `none`/`xhigh`/`max`
+ * with GPT-5.1+. The legacy `low`/`medium`/`high` are unchanged, so existing
+ * profiles stay valid as written.
+ */
+export type ReasoningLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+/** GPT-5 output-length control. Sent only to reasoning models. */
+export type Verbosity = "low" | "medium" | "high";
+
+/**
+ * Workbench gateway settings carried on a connection. Stored backend-side in
+ * `llm_connections.config_metadata` (JSONB) and flattened onto the DTO by the
+ * router, so the form round-trips without knowing the JSONB shape. Ignored by
+ * every other provider; never carries a secret (the key stays behind
+ * `api_key_ref`, ARCH §9.4).
+ */
+export interface WorkbenchFields {
+  /** Underlying model provider inside the gateway. Only 'openai' is implemented. */
+  workbench_provider?: string | null;
+  /** Sent as the x-kpmg-charge-code header. */
+  charge_code?: string | null;
+  /** Sent as the x-kpmg-region-override header. */
+  region_override?: string | null;
+  /** Sent as the azureml-model-deployment header. */
+  azureml_model_deployment?: string | null;
+}
+
+export interface ConnectionCreate extends WorkbenchFields {
   display_name: string;
   provider: Provider;
   base_url?: string | null;
@@ -159,7 +196,7 @@ export interface ConnectionCreate {
   scope?: ConnectionScope;
   team_id?: UUID | null;
 }
-export interface ConnectionRead {
+export interface ConnectionRead extends WorkbenchFields {
   id: UUID;
   org_id: UUID;
   display_name: string;
@@ -173,7 +210,7 @@ export interface ConnectionRead {
   created_at: ISODateTime;
 }
 /** Partial edit for PUT /providers/connections/{id} (Bug 5). */
-export interface ConnectionUpdate {
+export interface ConnectionUpdate extends WorkbenchFields {
   display_name?: string;
   provider?: Provider;
   base_url?: string | null;
@@ -200,6 +237,12 @@ export interface CatalogModelCreate {
   supports_vision?: boolean;
   supports_reasoning?: boolean;
   context_window?: number | null;
+  /**
+   * Which request schema this model follows. Declaring it is the only way to
+   * classify an Azure deployment, whose name the customer chooses and which is
+   * what discovery writes into `model_identifier`.
+   */
+  model_family?: ModelFamily | null;
   source?: CatalogSource;
 }
 /** Partial edit for PATCH /providers/catalog/{id} — chiefly reclassify model_type. */
@@ -211,6 +254,7 @@ export interface CatalogModelUpdate {
   supports_vision?: boolean;
   supports_reasoning?: boolean;
   context_window?: number | null;
+  model_family?: ModelFamily | null;
   enabled?: boolean;
 }
 export interface CatalogModelRead {
@@ -226,6 +270,7 @@ export interface CatalogModelRead {
   supports_vision: boolean;
   supports_reasoning: boolean;
   context_window: number | null;
+  model_family: string | null;
   source: string;
   enabled: boolean;
 }
@@ -249,9 +294,26 @@ export interface ProfileCreate {
   temperature?: number | null;
   top_p?: number | null;
   max_tokens?: number | null;
-  reasoning_level?: string | null;
+  reasoning_level?: ReasoningLevel | null;
+  /** GPT-5 output-length control; sent only to reasoning models. */
+  verbosity?: Verbosity | null;
   json_mode?: boolean;
   streaming?: boolean;
+  /** make this the org's default reasoning profile (planner + synthesizer). */
+  is_default?: boolean;
+}
+/** Partial update — notably how a profile is *selected* as the org default. */
+export interface ProfileUpdate {
+  name?: string;
+  default_model_id?: UUID | null;
+  temperature?: number | null;
+  top_p?: number | null;
+  max_tokens?: number | null;
+  reasoning_level?: ReasoningLevel | null;
+  verbosity?: Verbosity | null;
+  json_mode?: boolean;
+  streaming?: boolean;
+  is_default?: boolean;
 }
 export interface ProfileRead {
   id: UUID;
@@ -262,8 +324,14 @@ export interface ProfileRead {
   top_p: number | null;
   max_tokens: number | null;
   reasoning_level: string | null;
+  verbosity: string | null;
   json_mode: boolean;
   streaming: boolean;
+  /**
+   * The org's default reasoning profile: its model runs the Orchestrator's planner
+   * and the Synthesizer (ARCH §4.1/§4.6). At most one per org.
+   */
+  is_default: boolean;
 }
 
 // ── Knowledge (schemas/knowledge.py) ──────────────────────────────────────────

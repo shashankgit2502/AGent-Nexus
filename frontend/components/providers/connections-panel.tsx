@@ -38,8 +38,10 @@ import {
 } from "@/features/providers/use-providers";
 import {
   PROVIDER_OPTIONS,
+  WORKBENCH_PROVIDER_OPTIONS,
   initialConnectionForm,
   connectionFormFromRead,
+  providerIsWorkbench,
   providerNeedsBaseUrl,
   validateConnection,
   toConnectionCreate,
@@ -266,9 +268,60 @@ function ConnectionForm({
           placeholder="leave blank to keep the existing key"
         />
       </Field>
-      <Field label="API version (Azure)">
+      <Field
+        label="API version (Azure / Workbench)"
+        hint="2025-03-01-preview or later lets GPT-5 agents with tools keep their reasoning effort"
+      >
         <TextInput value={form.apiVersion} onChange={(e) => patch({ apiVersion: e.target.value })} />
       </Field>
+      {providerIsWorkbench(form.provider) ? (
+        <>
+          <Field
+            label="Workbench provider"
+            hint="The underlying model provider routed through the gateway"
+          >
+            <SelectInput
+              value={form.workbenchProvider}
+              onChange={(e) => patch({ workbenchProvider: e.target.value })}
+            >
+              {WORKBENCH_PROVIDER_OPTIONS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+          <Field label="Charge code (required)" hint="Sent as x-kpmg-charge-code">
+            <TextInput
+              value={form.chargeCode}
+              onChange={(e) => patch({ chargeCode: e.target.value })}
+              placeholder="e.g., 00000"
+            />
+          </Field>
+          <Field label="Region override (optional)" hint="Sent as x-kpmg-region-override">
+            <TextInput
+              value={form.regionOverride}
+              onChange={(e) => patch({ regionOverride: e.target.value })}
+              placeholder="e.g., westeurope"
+            />
+          </Field>
+          <Field
+            label="AzureML model deployment (optional)"
+            hint="Sent as azureml-model-deployment"
+          >
+            <TextInput
+              value={form.azuremlModelDeployment}
+              onChange={(e) => patch({ azuremlModelDeployment: e.target.value })}
+              placeholder="e.g., gpt-4o-deployment"
+            />
+          </Field>
+          <p className="md:col-span-2 text-[11px] text-zinc-500 font-mono">
+            The base URL is the gateway root — the deployment-scoped path is appended from each
+            catalog model&apos;s deployment name. The gateway has no model-list endpoint, so
+            &quot;Test&quot; validates by calling a model you have already registered against it.
+          </p>
+        </>
+      ) : null}
       <div className="flex items-end justify-end md:col-span-2 gap-2">
         {error ? <p className="text-[11px] text-rose-400 font-mono mr-auto">{error}</p> : null}
         <PrimaryButton onClick={onSubmit} loading={loading}>

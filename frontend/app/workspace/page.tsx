@@ -18,6 +18,7 @@ import { Network, ClipboardList, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSessionStore } from "@/store/session-store";
 import {
+  useCancelRun,
   useLaunchRun,
   useResumeRun,
   useSession,
@@ -33,6 +34,7 @@ import { ConsensusDetail } from "@/components/blackboard/consensus-detail";
 import { HitlGate, type HitlDecisionPayload } from "@/components/hitl-gate/hitl-gate";
 import { SessionHeader } from "@/components/workspace/session-header";
 import { LaunchConfig } from "@/components/workspace/launch-config";
+import { PlanPanel } from "@/components/workspace/plan-panel";
 import type { RunLaunch } from "@/types/api";
 
 interface ActiveRun {
@@ -74,8 +76,22 @@ function WorkspaceInner() {
   const meanConfidence = useSessionStore((s) => s.run.consensus?.meanConfidence ?? null);
   const hitlPending = useSessionStore((s) => s.run.hitl?.status === "pending");
 
+  const usage = useSessionStore((s) => s.run.usage);
+  const agents = useSessionStore((s) => s.run.agents);
+
   const launch = useLaunchRun();
   const resume = useResumeRun();
+  const cancel = useCancelRun();
+
+  // Before the terminal `usage` event lands, sum what the agents have reported so far, so
+  // the header shows a live-growing figure instead of "—" for the whole run. After it, the
+  // run-level total wins: it is authoritative and also covers the planner, synthesizer,
+  // verifier and producer, which no agent's own turn accounts for.
+  const liveTokens = useMemo(() => {
+    const sum = Object.values(agents).reduce((acc, a) => acc + (a.tokens?.total ?? 0), 0);
+    return sum > 0 ? sum : null;
+  }, [agents]);
+  const totalTokens = usage?.totalTokens ?? liveTokens;
 
   const teamAgents = useTeamAgents(active?.teamId ?? null);
   const labels = useMemo(() => toAgentLabels(teamAgents.data), [teamAgents.data]);
@@ -151,6 +167,17 @@ function WorkspaceInner() {
     });
   };
 
+  /**
+   * Stop the run server-side (ARCH §21.6). We do NOT clear the board here: the terminal
+   * `run_finished` arrives on the still-open WebSocket and settles the UI, so the user
+   * keeps everything the team produced before the stop instead of losing it to a local
+   * reset. Reset is a separate, explicit action.
+   */
+  const handleCancel = () => {
+    if (!active) return;
+    cancel.mutate(active.runId);
+  };
+
   const handleReset = () => {
     setActive(null); // null streamUrl → useSessionStream closes the socket
     resetStore();
@@ -169,6 +196,9 @@ function WorkspaceInner() {
           connection={stream.status}
           startedAt={active.startedAt}
           onReset={handleReset}
+          onCancel={handleCancel}
+          cancelling={cancel.isPending}
+          totalTokens={totalTokens}
           replay={active.replay}
         />
       ) : (
@@ -222,9 +252,12 @@ function WorkspaceInner() {
           {inspected ? <NodeInspector node={inspected} /> : null}
         </div>
 
-        {/* Debate — persistent right rail (only once a run exists) */}
+        {/* Plan + Debate — persistent right rail (only once a run exists). The plan
+            sits above the debate: it arrives first (before round 1) and is the frame
+            the contributions below should be read against. */}
         {active ? (
           <div className="lg:col-span-4 flex flex-col gap-4">
+            <PlanPanel labels={labels} />
             <div className="flex items-center gap-2">
               <ClipboardList className="w-4 h-4 text-emerald-400" />
               <span className="text-[11px] font-bold tracking-widest uppercase text-zinc-300">
@@ -300,12 +333,22 @@ function NodeInspector({ node }: { node: AgentNode }) {
   const d = node.data;
   return (
     <div className="artistic-pane p-4 rounded-xl text-xs flex flex-col gap-4 border border-white/10">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <Info label="Agent" value={d.label} />
         <Info label="Model" value={d.model ?? "—"} />
         <Info label="Status" value={d.status} />
         <Info label="Confidence" value={d.confidence === null ? "—" : `${Math.round(d.confidence * 100)}%`} />
+        {/* What the team thought, beside what the agent thought of itself (§8.1). */}
+        <Info label="Peer votes" value={d.votes > 0 ? String(d.votes) : "—"} />
       </div>
+      {d.subtask ? (
+        <div>
+          <p className="text-[9px] uppercase font-bold tracking-[0.15em] text-zinc-500 mb-1 font-mono">
+            Assigned work
+          </p>
+          <p className="text-zinc-200 leading-snug">{d.subtask}</p>
+        </div>
+      ) : null}
       {d.status === "error" && d.errorMessage ? (
         <div>
           <p className="text-[9px] uppercase font-bold tracking-[0.15em] text-rose-400/80 mb-1 font-mono">

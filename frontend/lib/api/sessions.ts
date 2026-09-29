@@ -25,4 +25,10 @@ export const sessionsApi = {
   resume: (sessionId: string, payload: ResumeRequest) =>
     apiFetch<RunLaunchResponse>(`/sessions/${sessionId}/resume`, { method: "POST", body: payload }),
   artifact: (runId: string) => apiFetch<ArtifactRead>(`/runs/${runId}/artifact`),
+  /**
+   * Stop a running or HITL-paused run (ARCH §21.6). Keyed on the RUN, so one endpoint
+   * serves both session runs and chat turns. Returns 409 if already terminal — a
+   * double-click is a harmless no-op, not an error.
+   */
+  cancel: (runId: string) => apiFetch<RunRead>(`/runs/${runId}/cancel`, { method: "POST" }),
 };

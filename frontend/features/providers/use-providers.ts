@@ -175,3 +175,18 @@ export function useCreateProfile() {
     onSuccess: () => qc.invalidateQueries({ queryKey: PROFILES_KEY }),
   });
 }
+
+/**
+ * Select a profile as the org default (planner + synthesizer model).
+ *
+ * The whole list is invalidated, not just the edited row: the backend clears the
+ * previous default in the same transaction, so a second profile's `is_default`
+ * flips server-side and a single-row update would leave two badges showing.
+ */
+export function useSetDefaultProfile() {
+  const qc = useQueryClient();
+  return useMutation<ProfileRead, Error, UUID>({
+    mutationFn: (id) => providersApi.updateProfile(id, { is_default: true }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: PROFILES_KEY }),
+  });
+}

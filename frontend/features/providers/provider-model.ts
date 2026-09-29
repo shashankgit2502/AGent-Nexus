@@ -15,6 +15,10 @@ import type {
   CatalogModelCreate,
   ProfileCreate,
   ModelType,
+  ModelFamily,
+  ReasoningLevel,
+  Verbosity,
+  WorkbenchFields,
 } from "@/types/api";
 
 // ── Connection ────────────────────────────────────────────────────────────────
@@ -26,6 +30,16 @@ export const PROVIDER_OPTIONS: readonly { value: Provider; label: string; needsB
   { value: "ollama", label: "Ollama", needsBaseUrl: true },
   { value: "openrouter", label: "OpenRouter", needsBaseUrl: false },
   { value: "openai_compatible", label: "OpenAI-compatible", needsBaseUrl: true },
+  // APIM-fronted gateway. The base URL is the gateway root: the deployment-scoped
+  // path is appended by the backend from the catalog model's deployment name.
+  { value: "workbench", label: "Workbench (KPMG gateway)", needsBaseUrl: true },
+] as const;
+
+/** The underlying provider routed through the Workbench gateway. Only `openai`
+ * has an implemented API contract — the others speak their own request shape and
+ * are rejected by the backend with a named cause rather than failing at runtime. */
+export const WORKBENCH_PROVIDER_OPTIONS: readonly { value: string; label: string }[] = [
+  { value: "openai", label: "OpenAI" },
 ] as const;
 
 export interface ConnectionFormState {
@@ -34,10 +48,25 @@ export interface ConnectionFormState {
   baseUrl: string;
   apiKeyRef: string;
   apiVersion: string;
+  // ── Workbench gateway settings (ignored by every other provider) ───────────
+  workbenchProvider: string;
+  chargeCode: string;
+  regionOverride: string;
+  azuremlModelDeployment: string;
 }
 
 export function initialConnectionForm(): ConnectionFormState {
-  return { displayName: "", provider: "openai", baseUrl: "", apiKeyRef: "", apiVersion: "" };
+  return {
+    displayName: "",
+    provider: "openai",
+    baseUrl: "",
+    apiKeyRef: "",
+    apiVersion: "",
+    workbenchProvider: "openai",
+    chargeCode: "",
+    regionOverride: "",
+    azuremlModelDeployment: "",
+  };
 }
 
 function nullable(value: string): string | null {
@@ -49,10 +78,39 @@ export function providerNeedsBaseUrl(provider: Provider): boolean {
   return PROVIDER_OPTIONS.find((p) => p.value === provider)?.needsBaseUrl ?? false;
 }
 
+/** Whether to show the gateway fields. Kept as a helper so the panel and the
+ * DTO builders agree on one rule. */
+export function providerIsWorkbench(provider: Provider): boolean {
+  return provider === "workbench";
+}
+
+/** The gateway fields, or `{}` for every other provider.
+ *
+ * Omitted entirely when the provider is not Workbench: the backend merges these
+ * by key presence (`exclude_unset`), so sending explicit nulls would *clear*
+ * stored gateway settings on an unrelated edit. */
+function workbenchFields(state: ConnectionFormState): WorkbenchFields {
+  if (!providerIsWorkbench(state.provider)) return {};
+  return {
+    workbench_provider: nullable(state.workbenchProvider),
+    charge_code: nullable(state.chargeCode),
+    region_override: nullable(state.regionOverride),
+    azureml_model_deployment: nullable(state.azuremlModelDeployment),
+  };
+}
+
 export function validateConnection(state: ConnectionFormState): string | null {
   if (!state.displayName.trim()) return "Name the connection.";
   if (providerNeedsBaseUrl(state.provider) && !state.baseUrl.trim())
     return "This provider requires a base URL.";
+  if (providerIsWorkbench(state.provider)) {
+    // The gateway carries a subscription key, so plaintext would leak it — the
+    // backend refuses non-HTTPS outright; saying so here avoids a round-trip.
+    if (!/^https:\/\//i.test(state.baseUrl.trim()))
+      return "The Workbench base URL must use HTTPS.";
+    if (!state.chargeCode.trim())
+      return "A charge code is required for Workbench (sent as x-kpmg-charge-code).";
+  }
   return null;
 }
 
@@ -63,12 +121,15 @@ export function toConnectionCreate(state: ConnectionFormState): ConnectionCreate
     base_url: nullable(state.baseUrl),
     api_key_ref: nullable(state.apiKeyRef),
     api_version: nullable(state.apiVersion),
+    ...workbenchFields(state),
   };
 }
 
 /** Prefill the connection form from an existing connection (edit mode, Bug 5).
  * The API key is never returned by the backend (write-only), so it starts blank;
- * leaving it blank on save keeps the stored key unchanged. */
+ * leaving it blank on save keeps the stored key unchanged. The gateway fields are
+ * flattened onto the read DTO by the router, so they round-trip — without this
+ * the edit form would open blank and a save would wipe the charge code. */
 export function connectionFormFromRead(conn: ConnectionRead): ConnectionFormState {
   return {
     displayName: conn.display_name,
@@ -76,6 +137,10 @@ export function connectionFormFromRead(conn: ConnectionRead): ConnectionFormStat
     baseUrl: conn.base_url ?? "",
     apiKeyRef: "",
     apiVersion: conn.api_version ?? "",
+    workbenchProvider: conn.workbench_provider ?? "openai",
+    chargeCode: conn.charge_code ?? "",
+    regionOverride: conn.region_override ?? "",
+    azuremlModelDeployment: conn.azureml_model_deployment ?? "",
   };
 }
 
@@ -87,6 +152,7 @@ export function toConnectionUpdate(state: ConnectionFormState): ConnectionUpdate
     provider: state.provider,
     base_url: nullable(state.baseUrl),
     api_version: nullable(state.apiVersion),
+    ...workbenchFields(state),
   };
   const key = state.apiKeyRef.trim();
   if (key !== "") update.api_key_ref = key;
@@ -95,16 +161,29 @@ export function toConnectionUpdate(state: ConnectionFormState): ConnectionUpdate
 
 // ── Catalog model ─────────────────────────────────────────────────────────────
 
+/** `model_family` choices. `auto` is the default and means "detect from the
+ * identifier + deployment name" — which is what every model registered before
+ * this field existed resolves to, so leaving it alone changes nothing. */
+export const MODEL_FAMILY_OPTIONS: readonly { value: ModelFamily; label: string }[] = [
+  { value: "auto", label: "Auto-detect" },
+  { value: "gpt4", label: "GPT-4 family and earlier (classic)" },
+  { value: "gpt5", label: "GPT-5 family / o-series (reasoning)" },
+] as const;
+
 export interface CatalogFormState {
   providerConnectionId: string;
   displayName: string;
   modelIdentifier: string;
   modelType: ModelType;
+  /** Azure routes by deployment, not model name; the Workbench gateway bakes it
+   * into the request path. Blank falls back to the model identifier. */
+  deploymentName: string;
   supportsTools: boolean;
   supportsStreaming: boolean;
   supportsVision: boolean;
   supportsReasoning: boolean;
   contextWindow: string;
+  modelFamily: ModelFamily;
 }
 
 export function initialCatalogForm(): CatalogFormState {
@@ -113,11 +192,13 @@ export function initialCatalogForm(): CatalogFormState {
     displayName: "",
     modelIdentifier: "",
     modelType: "chat",
+    deploymentName: "",
     supportsTools: true,
     supportsStreaming: true,
     supportsVision: false,
     supportsReasoning: false,
     contextWindow: "",
+    modelFamily: "auto",
   };
 }
 
@@ -146,16 +227,49 @@ export function toCatalogCreate(state: CatalogFormState): CatalogModelCreate {
     display_name: state.displayName.trim(),
     model_identifier: state.modelIdentifier.trim(),
     model_type: state.modelType,
+    deployment_name: nullable(state.deploymentName),
     supports_tools: supportsTools,
     supports_streaming: state.supportsStreaming,
     supports_vision: state.supportsVision,
     supports_reasoning: state.supportsReasoning,
     context_window: parseOptionalInt(state.contextWindow),
+    // `auto` is the backend's "unstated" — sent as null so the column stays NULL
+    // and the resolver detects from the names, exactly as before this field.
+    model_family: state.modelFamily === "auto" ? null : state.modelFamily,
     source: "manual",
   };
 }
 
 // ── Inference profile ─────────────────────────────────────────────────────────
+
+/**
+ * `reasoning_level` choices. The backend pins these with a CHECK constraint and a
+ * typed literal, so a free-text field here returns a 422 on any typo — which is
+ * why this is a closed list rather than an input.
+ *
+ * `none` is not merely "fast": on gpt-5.1+ a Chat Completions request carrying
+ * function tools fails unless the effort is none, because those models default to
+ * one. `""` means unstated, which leaves the provider default in place.
+ */
+export const REASONING_LEVEL_OPTIONS: readonly { value: "" | ReasoningLevel; label: string }[] = [
+  { value: "", label: "Not set (provider default)" },
+  { value: "none", label: "none — no reasoning" },
+  { value: "minimal", label: "minimal" },
+  { value: "low", label: "low" },
+  { value: "medium", label: "medium" },
+  { value: "high", label: "high" },
+  { value: "xhigh", label: "xhigh" },
+  { value: "max", label: "max" },
+] as const;
+
+/** GPT-5 output-length control. Ignored by GPT-4-family models, which reject the
+ * parameter — the backend withholds it for them rather than forwarding it. */
+export const VERBOSITY_OPTIONS: readonly { value: "" | Verbosity; label: string }[] = [
+  { value: "", label: "Not set (provider default)" },
+  { value: "low", label: "low — terse" },
+  { value: "medium", label: "medium — balanced" },
+  { value: "high", label: "high — expansive" },
+] as const;
 
 export interface ProfileFormState {
   name: string;
@@ -163,7 +277,8 @@ export interface ProfileFormState {
   temperature: string;
   topP: string;
   maxTokens: string;
-  reasoningLevel: string;
+  reasoningLevel: "" | ReasoningLevel;
+  verbosity: "" | Verbosity;
   jsonMode: boolean;
   streaming: boolean;
 }
@@ -176,6 +291,7 @@ export function initialProfileForm(): ProfileFormState {
     topP: "",
     maxTokens: "",
     reasoningLevel: "",
+    verbosity: "",
     jsonMode: false,
     streaming: true,
   };
@@ -207,7 +323,8 @@ export function toProfileCreate(state: ProfileFormState): ProfileCreate {
     temperature: parseOptionalFloat(state.temperature, 0, 2),
     top_p: parseOptionalFloat(state.topP, 0, 1),
     max_tokens: parseOptionalInt(state.maxTokens),
-    reasoning_level: nullable(state.reasoningLevel),
+    reasoning_level: state.reasoningLevel === "" ? null : state.reasoningLevel,
+    verbosity: state.verbosity === "" ? null : state.verbosity,
     json_mode: state.jsonMode,
     streaming: state.streaming,
   };

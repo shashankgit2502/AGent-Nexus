@@ -12,6 +12,7 @@ import type {
   ConnectionModelsQuery,
   ProfileCreate,
   ProfileRead,
+  ProfileUpdate,
   UUID,
 } from "@/types/api";
 
@@ -56,6 +57,9 @@ export const providersApi = {
   listProfiles: () => apiFetch<ProfileRead[]>("/providers/profiles"),
   createProfile: (payload: ProfileCreate) =>
     apiFetch<ProfileRead>("/providers/profiles", { method: "POST", body: payload }),
+  /** Partial update — used to select a profile as the org default (planner+synthesizer). */
+  updateProfile: (id: UUID, payload: ProfileUpdate) =>
+    apiFetch<ProfileRead>(`/providers/profiles/${id}`, { method: "PATCH", body: payload }),
   /** Soft-delete a profile; 409 (ApiError) if agents still reference it (ITEM 1). */
   deleteProfile: (id: UUID) =>
     apiFetch<void>(`/providers/profiles/${id}`, { method: "DELETE" }),

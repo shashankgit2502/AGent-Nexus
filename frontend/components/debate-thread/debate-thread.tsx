@@ -17,12 +17,58 @@ import {
   type DebateItem,
 } from "@/components/agent-graph/graph-model";
 import { ContentBlocks } from "@/components/content-blocks/content-block";
-import type { CritiqueSeverity } from "@/types/agui";
+import type { A2AIntent, CritiqueSeverity } from "@/types/agui";
 
 const SEVERITY_STYLE: Record<CritiqueSeverity, string> = {
   minor: "bg-amber-500/10 text-amber-400 border-amber-500/25",
   major: "bg-orange-500/10 text-orange-400 border-orange-500/25",
   blocking: "bg-rose-500/10 text-rose-400 border-rose-500/25",
+};
+
+/**
+ * Per-intent styling (ARCH §23.3). Colour is the fastest way to read *what kind of
+ * exchange* this was without parsing the text: amber = someone is blocked, violet = work
+ * changed hands, emerald = agreement, sky = a shared finding. Matches the A2A edge colours
+ * on the graph so the two views read as one system.
+ */
+const INTENT_STYLE: Record<A2AIntent, { text: string; border: string; badge: string }> = {
+  REQUEST: {
+    text: "text-amber-400",
+    border: "border-amber-900/40",
+    badge: "bg-amber-500/10 text-amber-400 border-amber-500/25",
+  },
+  DELEGATE: {
+    text: "text-violet-400",
+    border: "border-violet-900/40",
+    badge: "bg-violet-500/10 text-violet-400 border-violet-500/25",
+  },
+  ENDORSE: {
+    text: "text-emerald-400",
+    border: "border-emerald-900/40",
+    badge: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25",
+  },
+  INFORM: {
+    text: "text-sky-400",
+    border: "border-sky-900/40",
+    badge: "bg-sky-500/10 text-sky-400 border-sky-500/25",
+  },
+  PROPOSE: {
+    text: "text-indigo-400",
+    border: "border-indigo-900/40",
+    badge: "bg-indigo-500/10 text-indigo-400 border-indigo-500/25",
+  },
+  CRITIQUE: {
+    text: "text-rose-400",
+    border: "border-rose-900/40",
+    badge: "bg-rose-500/10 text-rose-400 border-rose-500/25",
+  },
+  // Never rendered as a thread row (a ballot has no body — see `buildDebateTimeline`),
+  // but kept so the map is exhaustive over the intent union.
+  VOTE: {
+    text: "text-teal-400",
+    border: "border-teal-900/40",
+    badge: "bg-teal-500/10 text-teal-400 border-teal-500/25",
+  },
 };
 
 interface DebateThreadProps {
@@ -94,10 +140,56 @@ function DebateItemView({
       exit={{ opacity: 0 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
       className={`p-3 rounded-lg border bg-[#111113]/70 ${
-        item.kind === "critique" ? "border-rose-900/30" : "border-zinc-800/80"
+        item.kind === "critique"
+          ? "border-rose-900/30"
+          : item.kind === "message"
+            ? INTENT_STYLE[item.intent].border
+            : "border-zinc-800/80"
       }`}
     >
-      {item.kind === "contribution" ? (
+      {item.kind === "message" ? (
+        <>
+          <div className="flex items-center justify-between mb-1.5 gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className={`text-[11px] font-semibold ${INTENT_STYLE[item.intent].text}`}>
+                {name(item.sender)}
+              </span>
+              <span className="text-[9px] text-zinc-600 font-mono truncate">
+                {item.recipients === null
+                  ? "→ everyone"
+                  : `→ ${item.recipients.map(name).join(", ")}`}{" "}
+                · Round {item.round}
+              </span>
+            </div>
+            <span
+              className={`shrink-0 text-[8px] px-1.5 py-0.5 rounded-full border font-mono font-bold uppercase ${INTENT_STYLE[item.intent].badge}`}
+            >
+              {item.intent}
+            </span>
+          </div>
+          <p className="text-[11.5px] leading-relaxed text-zinc-300 font-sans tracking-wide whitespace-pre-wrap">
+            {item.body}
+          </p>
+          {item.sourceUrls.length > 0 ? (
+            /* An INFORM's whole value is that a peer can CITE it rather than
+               re-research it — dropping the sources here would defeat the intent. */
+            <ul className="mt-1.5 flex flex-col gap-0.5">
+              {item.sourceUrls.map((url) => (
+                <li key={url} className="truncate">
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="text-[10px] font-mono text-sky-400/80 hover:text-sky-300 underline underline-offset-2"
+                  >
+                    {url}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      ) : item.kind === "contribution" ? (
         <>
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">

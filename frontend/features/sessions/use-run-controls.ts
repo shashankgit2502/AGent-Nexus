@@ -19,6 +19,7 @@ import type {
   AgentRead,
   RunLaunch,
   RunLaunchResponse,
+  RunRead,
   SessionRead,
   ResumeRequest,
 } from "@/types/api";
@@ -83,5 +84,19 @@ export interface ResumeVars {
 export function useResumeRun() {
   return useMutation<RunLaunchResponse, Error, ResumeVars>({
     mutationFn: ({ sessionId, payload }) => sessionsApi.resume(sessionId, payload),
+  });
+}
+
+/**
+ * Stop a run (ARCH §21.6).
+ *
+ * Deliberately fire-and-observe: the terminal `run_finished` arrives on the SAME open
+ * WebSocket, so the UI settles from the event stream rather than from this response. That
+ * keeps one source of truth for run state and means a cancel issued from another tab (or
+ * another operator) lands identically.
+ */
+export function useCancelRun() {
+  return useMutation<RunRead, Error, string>({
+    mutationFn: (runId) => sessionsApi.cancel(runId),
   });
 }

@@ -77,7 +77,17 @@ export function AgentNodeView({ data, selected }: NodeProps<AgentNode>) {
       <p className="text-[12px] font-bold text-white leading-tight truncate" title={data.label}>
         {data.label}
       </p>
-      {data.model ? (
+      {/* The plan's assignment (ARCH §4.1). Without it the board is a ring of anonymous
+          dots; with it you can read who owns what at a glance, which is the difference
+          between watching agents talk and watching a team work. */}
+      {data.subtask ? (
+        <p
+          className="text-[9px] text-emerald-300/85 leading-tight truncate"
+          title={data.subtask}
+        >
+          {data.subtask}
+        </p>
+      ) : data.model ? (
         <p className="text-[8.5px] font-mono text-zinc-500 truncate" title={data.model}>
           {data.model}
         </p>
@@ -86,9 +96,19 @@ export function AgentNodeView({ data, selected }: NodeProps<AgentNode>) {
         <span className="uppercase tracking-wider" style={{ color }}>
           {STATUS_LABEL[data.status]}
         </span>
-        {data.confidence !== null ? (
-          <span className="text-zinc-400">{Math.round(data.confidence * 100)}%</span>
-        ) : null}
+        <span className="flex items-center gap-1.5">
+          {/* Peer votes received (ARCH §8.1) — the team's verdict, next to the agent's
+              own. Hidden at zero so an unvoted round stays quiet rather than showing a
+              row of "0"s. */}
+          {data.votes > 0 ? (
+            <span className="text-teal-300" title="peer votes received">
+              ▲{data.votes}
+            </span>
+          ) : null}
+          {data.confidence !== null ? (
+            <span className="text-zinc-400">{Math.round(data.confidence * 100)}%</span>
+          ) : null}
+        </span>
       </div>
       {/* Failure reason (§21.5 abstention): show *why* the agent dropped out so the
           viewer isn't left guessing. Coloured by status (orange = fixable config
